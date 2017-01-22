@@ -83,6 +83,13 @@ void main()
 		create_task(vc_client.request(vc_req)).then([](http_response response) {
 			printf("/rest/vcenter/host Request Status Code: %d\n", response.status_code());
 
+			return response.extract_string();
+
+		}).then([](utility::string_t text) {
+			printf("The response was:\n");
+			wprintf(text.c_str());
+			printf("\n");
+
 		}).wait();
 
 	}
