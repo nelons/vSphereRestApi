@@ -1,11 +1,7 @@
-#include <iostream>
-#include <conio.h>
-#include <string>
-#include <ppltasks.h>
-#include <memory>
+#include "pch.h"
+#include "vsphere_api.h"
+
 #include <algorithm>
-#include <vector>
-#include <cpprest/http_client.h>
 
 using namespace std;
 using namespace web;                        // Common features like URIs.
@@ -13,39 +9,29 @@ using namespace web::http;                  // Common HTTP functionality
 using namespace web::http::client;
 using namespace concurrency;
 
-struct vc_info {
-	std::wstring server;
-	std::wstring token;
+using namespace Windows::Web::Http;
 
-	http_client_config config;
-	credentials server_credentials;
+using namespace part4;
 
-	int last_status_code;
-	std::string last_exception;
-};
+// Report - Local function only.
+void report_object(std::shared_ptr<vc_object>& obj)
+{
+	wchar_t output[512];
+	swprintf_s(output, 512, L"OBJECT - with %llu properties and %llu children.\n", obj->properties.size(), obj->children.size());
+	OutputDebugStringW(output);
 
-struct vc_property {
-	std::wstring name;
-	int type;
+	for_each(begin(obj->properties), end(obj->properties), [](shared_ptr<vc_property> prop) {
+		wchar_t output[512];
+		swprintf_s(output, 512, L"Property %s: %s\n", prop->name.c_str(), prop->s.c_str());
+		OutputDebugStringW(output);
+	});
 
-	// unrestricted unions not working on MSVC mean s cannot be a member :(
-	union {
-		bool b;
-		int i;
-		double d;
-	};
+	for_each(begin(obj->children), end(obj->children), [](shared_ptr<vc_object> child) {
+		report_object(child);
+	});
+}
 
-	std::wstring s;
-};
-
-struct vc_object {
-	std::vector<std::shared_ptr<vc_property>> properties;
-
-	std::shared_ptr<vc_object> parent;
-	std::vector<std::shared_ptr<vc_object>> children;
-};
-
-std::shared_ptr<vc_property> get_object_property(std::shared_ptr<vc_object>& obj, const wchar_t* name)
+std::shared_ptr<vc_property> part4::get_object_property(std::shared_ptr<vc_object>& obj, const wchar_t* name)
 {
 	std::shared_ptr<vc_property> result = nullptr;
 
@@ -62,28 +48,9 @@ std::shared_ptr<vc_property> get_object_property(std::shared_ptr<vc_object>& obj
 	return result;
 }
 
-void report_object(std::shared_ptr<vc_object>& obj)
-{
-	printf("OBJECT\n");
-	for_each(begin(obj->properties), end(obj->properties), [](shared_ptr<vc_property> prop) {
-		wprintf(L"Property %s: %s\n", prop->name.c_str(), prop->s.c_str());
-	});
-
-	for_each(begin(obj->children), end(obj->children), [](shared_ptr<vc_object> child) {
-		report_object(child);
-	});
-}
-
-struct vc_task {
-	std::weak_ptr<vc_info> pServer;
-	int status_code;
-	std::string exception;
-	std::shared_ptr<vc_object> data;
-};
-
 // Properties are automatically added to parent. Don't need to be returned.
 // Objects are returned to be added to the children ..
-std::shared_ptr<vc_object> CheckJson(utility::string_t name, web::json::value v, std::shared_ptr<vc_object> parent = nullptr)
+std::shared_ptr<vc_object> part4::CheckJson(utility::string_t name, web::json::value v, std::shared_ptr<vc_object> parent)
 {
 	std::shared_ptr<vc_object> result = nullptr;
 
@@ -133,10 +100,10 @@ std::shared_ptr<vc_object> CheckJson(utility::string_t name, web::json::value v,
 	return result;
 }
 
-task<shared_ptr<vc_info>> ConnectAsync(const wchar_t* server, const wchar_t* username, const wchar_t* password)
+concurrency::task<shared_ptr<vc_info>> part4::ConnectAsync(const wchar_t* server, const wchar_t* username, const wchar_t* password)
 {
 	std::shared_ptr<vc_info> pInfo = make_shared<vc_info>();
-	pInfo->config.set_validate_certificates(false);
+	//pInfo->config.set_validate_certificates(false);
 	pInfo->server_credentials = credentials(username, password);
 	pInfo->config.set_credentials(pInfo->server_credentials);
 	pInfo->server = server;
@@ -144,6 +111,11 @@ task<shared_ptr<vc_info>> ConnectAsync(const wchar_t* server, const wchar_t* use
 	http_client client(server, pInfo->config);
 	http_request request(methods::POST);
 	request.set_request_uri(U("/rest/com/vmware/cis/session"));
+
+	// TODO: Have to put this in as cpprestsdk isn't reliable on some networks.
+	auto var = new HttpClient();
+
+
 
 	return concurrency::create_task(client.request(request)).then([pInfo](http_response response) {
 		// if status is OK then extract json.
@@ -168,15 +140,17 @@ task<shared_ptr<vc_info>> ConnectAsync(const wchar_t* server, const wchar_t* use
 		}
 		catch (const std::exception& e) {
 			pInfo->last_exception = e.what();
-			printf("Exception: %s\n", e.what());
 
+			char output[512];
+			sprintf_s(output, 512, "Exception: %s.\n", e.what());
+			OutputDebugStringA(output);
 		}
 
 		return pInfo;
 	});
 }
 
-task<std::shared_ptr<vc_task>> SendRequestAsync(web::http::method method, std::shared_ptr<vc_info> pInfo, const wchar_t* uri)
+concurrency::task<std::shared_ptr<vc_task>> part4::SendRequestAsync(web::http::method method, std::shared_ptr<vc_info> pInfo, const wchar_t* uri)
 {
 	std::shared_ptr<vc_task> result = make_shared<vc_task>();
 	result->pServer = pInfo;
@@ -207,64 +181,11 @@ task<std::shared_ptr<vc_task>> SendRequestAsync(web::http::method method, std::s
 
 		}
 		catch (const std::exception& e) {
-			printf("Get exception: %s.\n", e.what());
+			char output[512];
+			sprintf_s(output, 512, "Exception: %s.\n", e.what());
+			OutputDebugStringA(output);
 		}
 
 		return result;
 	});
-}
-
-void main()
-{
-	std::wstring vcenter_url = L"";
-
-	if (vcenter_url.length() == 0) {
-		printf("Enter the IP/DNS of the vCenter Server: ");
-		std::wstring vcenter_address;
-		getline(wcin, vcenter_address);
-		vcenter_url = L"https://";
-		vcenter_url += vcenter_address;
-	}
-
-	std::wstring admin_username = L"administrator@vsphere.local";
-	std::wstring admin_password = L"";
-
-	if (admin_password.length() == 0) {
-		wprintf(L"Enter the password for the '%s' account: ", admin_username.c_str());
-		getline(wcin, admin_password);
-	}
-
-	std::shared_ptr<vc_info> pInfo = ConnectAsync(vcenter_url.c_str(), admin_username.c_str(), admin_password.c_str()).get();
-	if (pInfo && pInfo->last_status_code == 200) {
-		wprintf(L"Connected successfully to %s.\n", vcenter_url.c_str());
-
-		// Get hosts.
-		shared_ptr<vc_task> task_results = SendRequestAsync(methods::GET, pInfo, L"/rest/vcenter/host").get();
-		if (task_results->status_code == 200) {
-			// Do something with the hosts ...
-			if (task_results->data) {
-				printf("There are %d results.\n", task_results->data->children.size());
-
-				for_each(begin(task_results->data->children), end(task_results->data->children), [](std::shared_ptr<vc_object> host) {
-					std::shared_ptr<vc_property> host_name = get_object_property(host, L"name");
-					if (host_name) {
-						wprintf(L"Host discovered: %s\n", host_name->s.c_str());
-					}
-				});
-			}
-		}
-
-	} else {
-		// Could not connect.
-		if (pInfo) {
-			printf("ConnectAsync request returned code %d.\n", pInfo->last_status_code);
-
-		} else {
-			printf("Unknown error - ConnectAsync did not return server information object.\n");
-
-		}
-	}
-
-	std::cout << "Press any key to exit." << endl;
-	_getch();
 }

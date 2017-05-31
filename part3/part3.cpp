@@ -69,7 +69,8 @@ std::shared_ptr<vc_property> get_object_property(std::shared_ptr<vc_object>& obj
 
 void report_object(std::shared_ptr<vc_object>& obj)
 {
-	printf("OBJECT\n");
+	printf("OBJECT - with %d properties and %d children.\n", obj->properties.size(), obj->children.size());
+
 	for_each(begin(obj->properties), end(obj->properties), [](shared_ptr<vc_property> prop) {
 		wprintf(L"Property %s: %s\n", prop->name.c_str(), prop->s.c_str());
 	});
@@ -221,7 +222,7 @@ task<std::shared_ptr<vc_task>> SendRequestAsync(web::http::method method, std::s
 
 void main()
 {
-	std::wstring vcenter_url = L"https://lb-vcsa-01.home.internal";
+	std::wstring vcenter_url = L"https://auto-vc.auto.internal";
 
 	if (vcenter_url.length() == 0) {
 		printf("Enter the IP/DNS of the vCenter Server: ");
@@ -243,7 +244,6 @@ void main()
 	if (pInfo && pInfo->last_status_code == 200) {
 		wprintf(L"Connected successfully to %s.\n", vcenter_url.c_str());
 
-		// This stuff should move to part3.
 		shared_ptr<vc_task> tag_results = SendRequestAsync(methods::GET, pInfo, L"/rest/com/vmware/cis/tagging/tag").get();
 		if (tag_results->status_code == 200) {
 			if (tag_results->data) {
@@ -254,22 +254,39 @@ void main()
 					target += prop->s.c_str();
 					shared_ptr<vc_task> tag_info = SendRequestAsync(methods::GET, pInfo, target.c_str()).get();
 					if (tag_info && tag_info->status_code == 200) {
-						//report_object(tag_info->data);
-						// TODO: fix this.
-						shared_ptr<vc_property> tag_name = get_object_property(tag_info->data, L"name");
+						shared_ptr<vc_property> tag_name = nullptr;
+						if (tag_info->data->children.size() > 0)
+							tag_name = get_object_property(tag_info->data->children[0], L"name");
 
 						// Get the list of objects with this tag.
 						wstring tag_url = L"/rest/com/vmware/cis/tagging/tag-association/id:";
 						tag_url += prop->s.c_str();
 						tag_url += L"?~action=list-attached-objects";
 
-						// TODO: needs to be a post.
 						shared_ptr<vc_task> tagged_objects = SendRequestAsync(methods::POST, pInfo, tag_url.c_str()).get();
 						if (tagged_objects && tagged_objects->status_code == 200) {
-							if (tag_name)
-								wprintf(L"Objects that are tagged with %s:\n", tag_name->s.c_str());
 
-							report_object(tagged_objects->data);
+							// object is reported even if there is no data.
+							if (tagged_objects->data->children.size() > 0) {
+								if (tag_name)
+									wprintf(L"Objects that are tagged with %s:\n", tag_name->s.c_str());
+
+								//report_object(tagged_objects->data);
+
+								// Output information.
+								// tagged_objects->data->children[i] is an object.
+								std::for_each(begin(tagged_objects->data->children), end(tagged_objects->data->children), [](std::shared_ptr<vc_object> object) {
+									// Get details of the object.
+									report_object(object);
+
+									auto attached_object_id = get_object_property(object, L"id");
+									auto attached_object_type = get_object_property(object, L"type");
+
+									// do something with the tagged object here.
+
+
+								});
+							}
 						}
 					}
 				});
